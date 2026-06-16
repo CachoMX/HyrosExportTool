@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { ExportRow, ReportType, ROW_HEADERS, StreamMessage } from "@/lib/types";
-import { exportCsv, exportXlsx } from "@/lib/clientExport";
+import { exportCsv, exportXlsx, visibleHeaders } from "@/lib/clientExport";
 
 const REPORTS: { key: ReportType; label: string }[] = [
   { key: "sales", label: "Sales" },
@@ -39,6 +39,9 @@ export default function Page() {
   const abortRef = useRef<AbortController | null>(null);
 
   const canRun = apiKey.trim() && fromDate && toDate && !running;
+
+  const headers = useMemo(() => visibleHeaders(rows), [rows]);
+  const hiddenCount = ROW_HEADERS.length - headers.length;
 
   const pct = useMemo(() => {
     if (done) return 100;
@@ -230,10 +233,10 @@ export default function Page() {
               <div className="l">Unique emails</div>
             </div>
             <div className="spacer" />
-            <button className="ghost" onClick={() => exportCsv(rows, `${baseName}.csv`)} type="button">
+            <button className="ghost" onClick={() => exportCsv(rows, `${baseName}.csv`, headers)} type="button">
               ⬇ Export CSV
             </button>
-            <button className="ghost" onClick={() => exportXlsx(rows, `${baseName}.xlsx`, report)} type="button">
+            <button className="ghost" onClick={() => exportXlsx(rows, `${baseName}.xlsx`, report, headers)} type="button">
               ⬇ Export XLSX
             </button>
           </div>
@@ -242,7 +245,7 @@ export default function Page() {
             <table>
               <thead>
                 <tr>
-                  {ROW_HEADERS.map((h) => (
+                  {headers.map((h) => (
                     <th key={h.key}>{h.label}</th>
                   ))}
                 </tr>
@@ -250,7 +253,7 @@ export default function Page() {
               <tbody>
                 {rows.slice(0, PREVIEW_LIMIT).map((r, i) => (
                   <tr key={i}>
-                    {ROW_HEADERS.map((h) => (
+                    {headers.map((h) => (
                       <td key={h.key} title={String(r[h.key] ?? "")}>
                         {String(r[h.key] ?? "")}
                       </td>
@@ -263,6 +266,14 @@ export default function Page() {
           {rows.length > PREVIEW_LIMIT && (
             <p className="note">
               Showing first {PREVIEW_LIMIT} of {rows.length.toLocaleString()} rows. Export to get the full data set.
+            </p>
+          )}
+          {hiddenCount > 0 && (
+            <p className="note">
+              {hiddenCount} column{hiddenCount > 1 ? "s" : ""} hidden because{" "}
+              {hiddenCount > 1 ? "they were" : "it was"} empty for every row (e.g. Campaign / Ad&nbsp;Set ID when your
+              Hyros account doesn&apos;t expose them). They reappear automatically for accounts/reports that have the
+              data.
             </p>
           )}
         </div>
