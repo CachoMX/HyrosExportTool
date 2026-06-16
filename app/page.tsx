@@ -287,6 +287,60 @@ export default function Page() {
         calls / carts) — Hyros only exposes an ad source once a lead converts, so leads that haven&apos;t converted yet
         show no source.
       </p>
+
+      <section className="how">
+        <h2>How it works</h2>
+        <p className="how-sub">
+          Hyros has no single endpoint that returns everything, so each report combines a base list endpoint with the
+          attribution report to resolve the campaign → ad&nbsp;set → ad hierarchy. All calls run server-side, paginated
+          (250/page) and rate-limited (30/s, 1000/min) with automatic retries on <code>429</code>.
+        </p>
+
+        <div className="how-grid">
+          <div className="how-card">
+            <div className="how-head">
+              <span className="badge sales">Sales</span>
+              <span className="badge calls">Calls</span>
+            </div>
+            <ol className="how-steps">
+              <li>
+                <code>GET /sales</code> <span className="muted">(or </span>
+                <code>/calls</code>
+                <span className="muted">)</span> — base records, paginated. Brings{" "}
+                <b>email, origin source, last source, ad name, ad id</b> directly.
+              </li>
+              <li>
+                <code>GET /attribution</code> at <code>facebook_ad</code>, <code>facebook_adset</code> and{" "}
+                <code>facebook_campaign</code> levels (per ad account) — resolves <b>ad set name/ID</b> and{" "}
+                <b>campaign name/ID</b>. Runs only when “Full enrichment” is on.
+              </li>
+            </ol>
+          </div>
+
+          <div className="how-card">
+            <div className="how-head">
+              <span className="badge leads">Leads</span>
+            </div>
+            <ol className="how-steps">
+              <li>
+                <code>GET /leads</code> — base list, paginated.
+              </li>
+              <li>
+                <code>GET /leads/journey</code> in batches of 20 ids — a lead&apos;s ad source lives on its
+                sales/calls/carts, so the source comes from there (raw clicks are organic, not used).
+              </li>
+              <li>
+                <code>GET /attribution</code> — same campaign / ad&nbsp;set enrichment as above.
+              </li>
+            </ol>
+          </div>
+        </div>
+
+        <p className="how-foot">
+          Example measured: <b>Sales</b> for 1 week ≈ 7 calls · <b>Leads</b> for 5 days (330 leads) ≈ 20 calls.
+          Concurrency is capped (6 parallel) to stay within limits while keeping it fast.
+        </p>
+      </section>
     </div>
   );
 }
