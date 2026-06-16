@@ -5,8 +5,8 @@
 import { NextRequest } from "next/server";
 import { HyrosClient, pool } from "@/lib/hyros";
 import { buildAdDictionary } from "@/lib/enrich";
-import { callToRow, collectTargets, leadToRow, saleToRow } from "@/lib/mapping";
-import { AdInfo, Call, Click, EnrichMode, Lead, ReportType, Sale, StreamMessage } from "@/lib/types";
+import { callToRow, collectJourneyTargets, collectTargets, leadJourneyToRow, saleToRow } from "@/lib/mapping";
+import { AdInfo, Call, EnrichMode, Lead, LeadJourney, ReportType, Sale, StreamMessage } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -113,52 +113,58 @@ async function runLeads(
     send({ type: "progress", phase: "Fetching leads", fetched });
   });
 
-  // Enrich each lead's source via its click history (one lookup per lead).
-  send({ type: "progress", phase: "Fetching lead sources (clicks)", fetched: 0, detail: `${leads.length} leads` });
-  const clicksByLead = new Map<string, Click[]>();
+  // A lead's ad attribution lives on its sales/calls/carts (first/last source), NOT on
+  // raw clicks (which are mostly organic funnel pages). Pull each lead's journey in
+  // batches and derive the source from there — same attribution sales & calls carry.
+  send({ type: "progress", phase: "Fetching lead journeys", fetched: 0, total: leads.length });
+  const ids = leads.map((l) => l.id).filter((x): x is string => !!x);
+  const BATCH = 20;
+  const batches: string[][] = [];
+  for (let i = 0; i < ids.length; i += BATCH) batches.push(ids.slice(i, i + BATCH));
+
+  const journeys: LeadJourney[] = [];
   await pool(
-    leads,
-    8,
-    async (lead) => {
-      if (!lead.id) return;
-      const acc: Click[] = [];
+    batches,
+    6,
+    async (batch) => {
       try {
-        await client.paginate<Click>(
-          "/api/v1.0/leads/clicks",
-          { leadId: lead.id, fromDate, toDate },
-          (items) => {
-            acc.push(...items);
-          }
-        );
+        const resp = await client.request<LeadJourney[]>("/api/v1.0/leads/journey", { ids: batch.join(",") });
+        if (resp.result) journeys.push(...resp.result);
       } catch {
-        // skip leads whose clicks can't be fetched
+        // skip a failed batch rather than aborting the whole export
       }
-      clicksByLead.set(lead.id, acc);
     },
-    (done) => {
-      if (done % 25 === 0 || done === leads.length)
-        send({ type: "progress", phase: "Fetching lead sources (clicks)", fetched: done, total: leads.length });
-    }
+    (done) => send({ type: "progress", phase: "Fetching lead journeys", fetched: Math.min(done * BATCH, leads.length), total: leads.length })
   );
 
-  // Leads are attributed by click. In practice most lead clicks are organic
-  // (no ad source), so the campaign/ad-set hierarchy can't be resolved per lead the
-  // way it can for sales/calls. We surface the click-derived source and note the limit.
-  const dict = new Map<string, AdInfo>();
-  const paidLeads = [...clicksByLead.values()].filter((cl) =>
-    cl.some((c) => c.adSpendId != null && c.adSpendId !== "")
-  ).length;
+  // Full enrichment: same campaign/ad-set dictionary as sales/calls, built from the
+  // ad accounts referenced by the leads' journey sources.
+  let dict = new Map<string, AdInfo>();
   if (enrich === "full") {
-    send({
-      type: "warn",
-      message: `Leads source comes from click history. ${paidLeads}/${leads.length} lead(s) have a paid click; the rest are organic/untracked, so their Campaign/Ad Set/Ad columns are blank. Sales & Calls reports carry full ad attribution.`,
-    });
+    const targets = collectJourneyTargets(journeys);
+    if (targets.length) {
+      send({ type: "progress", phase: "Enriching campaigns/ad sets", fetched: 0, detail: `${targets.length} ad account(s)` });
+      const { byAdId, warnings } = await buildAdDictionary(client, targets, fromDate, toDate, (detail, fetched) =>
+        send({ type: "progress", phase: "Enriching campaigns/ad sets", fetched, detail })
+      );
+      dict = byAdId;
+      warnings.forEach((w) => send({ type: "warn", message: w }));
+    }
   }
 
+  const jByLead = new Map<string, LeadJourney>();
+  for (const j of journeys) if (j.lead?.id) jByLead.set(j.lead.id, j);
+
+  const rows = leads.map((l) => leadJourneyToRow(jByLead.get(l.id || "") || { lead: l }, l, dict));
+  const withSource = rows.filter((r) => r.originSource || r.lastSource).length;
+
   const CHUNK = 500;
-  const rows = leads.map((l) => leadToRow(l, clicksByLead.get(l.id || "") || [], dict));
   for (let i = 0; i < rows.length; i += CHUNK) {
     send({ type: "rows", rows: rows.slice(i, i + CHUNK) });
   }
+  send({
+    type: "warn",
+    message: `${withSource}/${leads.length} lead(s) have ad attribution (resolved from their sales/calls/carts). Leads with none have not converted yet, so Hyros does not expose an ad source for them via the API.`,
+  });
   send({ type: "done", total: leads.length });
 }

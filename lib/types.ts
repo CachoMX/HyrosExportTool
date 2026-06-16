@@ -65,6 +65,23 @@ export interface Call {
   lastSource?: Attribution;
 }
 
+/** A cart inside a lead journey (carries its own attribution). */
+export interface Cart {
+  id?: string;
+  orderId?: string;
+  creationDate?: string;
+  firstSource?: Attribution;
+  lastSource?: Attribution;
+}
+
+/** Lead journey from /leads/journey — where a lead's ad attribution actually lives. */
+export interface LeadJourney {
+  lead?: Lead;
+  sales?: Sale[];
+  calls?: Call[];
+  carts?: Cart[];
+}
+
 /** A single Hyros click (from /leads/clicks), used to derive lead source. */
 export interface Click {
   id?: string;

@@ -272,8 +272,9 @@ export default function Page() {
         The API Key is sent only to this app&apos;s own server to call Hyros and is never stored. Rate limits (30/s,
         1000/min) are respected automatically. <b>Sales</b> &amp; <b>calls</b> carry full ad attribution (origin/last
         source, ad name, ad id, ad&nbsp;set name; ad&nbsp;set id and campaign columns fill only when your ad account
-        exposes them in Hyros). For <b>leads</b>, source is derived from click history — most leads are organic, so
-        their ad columns are blank.
+        exposes them in Hyros). For <b>leads</b>, source is resolved from each lead&apos;s journey (their sales /
+        calls / carts) — Hyros only exposes an ad source once a lead converts, so leads that haven&apos;t converted yet
+        show no source.
       </p>
     </div>
   );

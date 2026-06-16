@@ -41,9 +41,14 @@ returns a `nextPageId`. The app follows `nextPageId` until exhausted.
   **Last Source** = `lastSource.name`, and ad name / ad id / ad account / platform from
   `lastSource.adSource` + `lastSource.sourceLinkAd`.
 - **Calls** — `GET /api/v1.0/calls?fromDate&toDate`. Same attribution shape as sales.
-- **Leads** — `GET /api/v1.0/leads?fromDate&toDate` returns **no attribution**, so for each lead
-  the app calls `GET /api/v1.0/leads/clicks?leadId=…` and derives Origin Source (first click) and
-  Last Source (last click) from the click history (8 concurrent lookups, rate-limited).
+- **Leads** — `GET /api/v1.0/leads?fromDate&toDate` returns **no attribution**. A lead's ad source
+  lives on its sales/calls/carts, so the app pulls each lead's journey in batches
+  (`GET /api/v1.0/leads/journey?ids=…`, 20 ids/batch) and derives Origin Source (earliest record's
+  `firstSource`) and Last Source (latest record's `lastSource`), then enriches the ad columns exactly
+  like sales/calls. Raw `/leads/clicks` are **not** used — verified against the live account, lead
+  clicks are almost all organic funnel pages (`adspendType: NONE`) and never carry the ad source.
+  Consequence: Hyros only exposes an ad source once a lead **converts**, so leads that haven't
+  converted yet show no source (in the test account ~2-3% of leads had attribution).
 
 ### Campaign / Ad Set enrichment (the "Full enrichment" toggle)
 
