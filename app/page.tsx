@@ -189,7 +189,8 @@ export default function Page() {
         <div className="row mt">
           <label className="checkbox" style={{ marginBottom: 0 }}>
             <input type="checkbox" checked={enrichFull} onChange={(e) => setEnrichFull(e.target.checked)} />
-            Full enrichment (resolve campaign / ad set names & IDs via the attribution report)
+            Full enrichment — add Ad Set &amp; Campaign columns from the attribution report (filled only when your
+            Hyros account exposes them; empty columns are hidden automatically)
           </label>
           <div className="spacer" />
           {running ? (
