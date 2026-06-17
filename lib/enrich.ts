@@ -13,7 +13,24 @@
 // Whatever a given account doesn't expose (e.g. campaign sync missing) is left blank.
 
 import { HyrosClient } from "./hyros";
-import { AdInfo } from "./types";
+import { AdInfo, Source } from "./types";
+
+/**
+ * Fetch the full /sources catalog once and index it by tag. A lead's `@`-prefixed
+ * tag (in the base /leads response) matches a source's `tag`, which gives the source
+ * name + adSource — this is how ~74-87% of leads get a source without any per-lead call.
+ */
+export async function fetchSourceMap(
+  client: HyrosClient,
+  onProgress?: (fetched: number) => void
+): Promise<Map<string, Source>> {
+  const byTag = new Map<string, Source>();
+  await client.paginate<Source>("/api/v1.0/sources", {}, (rows, fetched) => {
+    for (const s of rows) if (s.tag) byTag.set(s.tag, s);
+    onProgress?.(fetched);
+  });
+  return byTag;
+}
 
 interface Levels {
   ad: string | null;

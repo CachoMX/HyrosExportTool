@@ -1,21 +1,8 @@
 // Flattens Hyros Sale / Call / Lead records into the flat ExportRow the client wants.
 
-import { AdInfo, Attribution, Call, ExportRow, Lead, LeadJourney, Sale } from "./types";
+import { AdInfo, Attribution, Call, ExportRow, Lead, Sale, Source } from "./types";
 
 const s = (v: unknown): string => (v === undefined || v === null ? "" : String(v));
-
-/** Parse Hyros dates: ISO ("2026-06-16T10:15:01-04:00") or Java ("Mon Jun 15 20:46:24 UTC 2026"). */
-export function parseHyrosDate(v?: string): number {
-  if (!v) return 0;
-  const t = Date.parse(v);
-  if (!isNaN(t)) return t;
-  const m = v.match(/^\w{3} (\w{3}) (\d{1,2}) (\d{2}):(\d{2}):(\d{2}) \w+ (\d{4})$/);
-  if (m) {
-    const t2 = Date.parse(`${m[1]} ${m[2]} ${m[6]} ${m[3]}:${m[4]}:${m[5]} UTC`);
-    if (!isNaN(t2)) return t2;
-  }
-  return 0;
-}
 
 // The real platform ad id lives on sourceLinkAd.adSourceId — verified to be the id
 // the /attribution report keys on (adSource.adSourceId does NOT match it).
@@ -100,54 +87,61 @@ export function callToRow(call: Call, dict: Map<string, AdInfo>): ExportRow {
 }
 
 /**
- * Build a leads row from the lead's JOURNEY. A lead's ad attribution lives on its
- * sales/calls/carts (first/last source) — NOT on raw clicks (which are mostly the
- * organic funnel pages). We take the earliest record's firstSource as the origin and
- * the latest record's lastSource as the last source, then enrich the ad columns.
+ * Build a leads row from the lead's `@`-prefixed source tags (present in the base
+ * /leads response) resolved against the /sources catalog. This is where a lead's
+ * source actually lives — ~74-87% coverage, with no per-lead API call. The journey
+ * approach only covered the ~2-3% of leads that had converted.
  */
-export function leadJourneyToRow(journey: LeadJourney, fallbackLead: Lead | undefined, dict: Map<string, AdInfo>): ExportRow {
-  const lead = journey.lead || fallbackLead || {};
+export function leadToRow(lead: Lead, sourceMap: Map<string, Source>, dict: Map<string, AdInfo>): ExportRow {
   const row: ExportRow = blankRow();
   row.email = s(lead.email);
   row.creationDate = s(lead.creationDate);
   row.recordId = s(lead.id);
 
-  // All attributed touchpoints across the journey, sorted by date.
-  const records: { date: number; first?: Attribution; last?: Attribution }[] = [];
-  for (const sale of journey.sales || []) records.push({ date: parseHyrosDate(sale.creationDate), first: sale.firstSource, last: sale.lastSource });
-  for (const call of journey.calls || []) records.push({ date: parseHyrosDate(call.creationDate), first: call.firstSource, last: call.lastSource });
-  for (const cart of journey.carts || []) records.push({ date: parseHyrosDate(cart.creationDate), first: cart.firstSource, last: cart.lastSource });
-  records.sort((a, b) => a.date - b.date);
+  const tags = lead.tags || [];
+  const atTags = tags.filter((t) => t.startsWith("@"));
+  const resolved = atTags.map((t) => sourceMap.get(t)).filter((x): x is Source => !!x);
 
-  const originAttr = records.find((r) => r.first?.name || r.first?.sourceLinkAd)?.first;
-  const lastWithSource = [...records].reverse().find((r) => r.last?.name || r.last?.sourceLinkAd);
-  const lastAttr = lastWithSource?.last;
+  if (resolved.length) {
+    // Tags aren't time-ordered, so origin/last are approximate for multi-source leads.
+    row.originSource = s(resolved[0].name);
+    row.lastSource = s(resolved[resolved.length - 1].name);
 
-  row.originSource = s(originAttr?.name);
-  row.lastSource = s(lastAttr?.name);
+    // Prefer a paid source (one with an adSource) for the ad columns.
+    const adSrc = resolved.find((r) => r.adSource?.adSourceId) || resolved[resolved.length - 1];
+    const ad = adSrc.adSource;
+    row.adId = s(ad?.adSourceId);
+    row.platform = s(ad?.platform);
+    row.adAccountId = s(ad?.adAccountId);
+    row.adName = s(adSrc.name);
 
-  const adAttr = chooseAdAttr(originAttr, lastAttr);
-  applyAd(row, adAttr, dict);
+    const info = row.adId ? dict.get(row.adId) : undefined;
+    if (info) {
+      row.campaignName = s(info.campaignName);
+      row.campaignId = s(info.campaignId);
+      row.adSetName = s(info.adSetName);
+      row.adSetId = s(info.adSetId);
+      if (info.adName) row.adName = info.adName;
+    }
+  }
 
-  row.extra = [
-    (journey.sales || []).length ? `sales:${(journey.sales || []).length}` : "",
-    (journey.calls || []).length ? `calls:${(journey.calls || []).length}` : "",
-    (lead.tags || []).length ? `tags:${(lead.tags || []).join(",")}` : "",
-  ]
+  const products = tags.filter((t) => t.startsWith("$")).length;
+  row.extra = [atTags.length > 1 ? `sources:${atTags.length}` : "", products ? "converted" : ""]
     .filter(Boolean)
     .join(" | ");
   return row;
 }
 
-/** Distinct (platform, adAccountId) pairs referenced by a set of lead journeys. */
-export function collectJourneyTargets(journeys: LeadJourney[]): { platform: string; adAccountId: string }[] {
-  const records: { firstSource?: Attribution; lastSource?: Attribution }[] = [];
-  for (const j of journeys) {
-    for (const sale of j.sales || []) records.push(sale);
-    for (const call of j.calls || []) records.push(call);
-    for (const cart of j.carts || []) records.push(cart);
+/** Distinct (platform, adAccountId) pairs referenced by a set of sources. */
+export function collectSourceTargets(sources: Source[]): { platform: string; adAccountId: string }[] {
+  const map = new Map<string, { platform: string; adAccountId: string }>();
+  for (const src of sources) {
+    const ad = src.adSource;
+    if (ad?.adAccountId && ad?.platform) {
+      map.set(`${ad.platform}|${ad.adAccountId}`, { platform: ad.platform, adAccountId: ad.adAccountId });
+    }
   }
-  return collectTargets(records);
+  return [...map.values()];
 }
 
 export function blankRow(): ExportRow {

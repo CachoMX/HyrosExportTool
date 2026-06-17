@@ -3,10 +3,10 @@
 // enriched and flattened. Keeps the API key server-side only.
 
 import { NextRequest } from "next/server";
-import { HyrosClient, pool } from "@/lib/hyros";
-import { buildAdDictionary } from "@/lib/enrich";
-import { callToRow, collectJourneyTargets, collectTargets, leadJourneyToRow, saleToRow } from "@/lib/mapping";
-import { AdInfo, Call, EnrichMode, Lead, LeadJourney, ReportType, Sale, StreamMessage } from "@/lib/types";
+import { HyrosClient } from "@/lib/hyros";
+import { buildAdDictionary, fetchSourceMap } from "@/lib/enrich";
+import { callToRow, collectSourceTargets, collectTargets, leadToRow, saleToRow } from "@/lib/mapping";
+import { AdInfo, Call, EnrichMode, Lead, ReportType, Sale, Source, StreamMessage } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -113,35 +113,26 @@ async function runLeads(
     send({ type: "progress", phase: "Fetching leads", fetched });
   });
 
-  // A lead's ad attribution lives on its sales/calls/carts (first/last source), NOT on
-  // raw clicks (which are mostly organic funnel pages). Pull each lead's journey in
-  // batches and derive the source from there — same attribution sales & calls carry.
-  send({ type: "progress", phase: "Fetching lead journeys", fetched: 0, total: leads.length });
-  const ids = leads.map((l) => l.id).filter((x): x is string => !!x);
-  const BATCH = 20;
-  const batches: string[][] = [];
-  for (let i = 0; i < ids.length; i += BATCH) batches.push(ids.slice(i, i + BATCH));
-
-  const journeys: LeadJourney[] = [];
-  await pool(
-    batches,
-    6,
-    async (batch) => {
-      try {
-        const resp = await client.request<LeadJourney[]>("/api/v1.0/leads/journey", { ids: batch.join(",") });
-        if (resp.result) journeys.push(...resp.result);
-      } catch {
-        // skip a failed batch rather than aborting the whole export
-      }
-    },
-    (done) => send({ type: "progress", phase: "Fetching lead journeys", fetched: Math.min(done * BATCH, leads.length), total: leads.length })
+  // A lead's source lives in its `@`-prefixed tags (already in the base response),
+  // which map to the /sources catalog. We fetch that catalog once (no per-lead calls)
+  // and resolve each lead's source from its tags — ~74-87% coverage and scales to 160k.
+  send({ type: "progress", phase: "Fetching source catalog", fetched: 0 });
+  const sourceMap = await fetchSourceMap(client, (fetched) =>
+    send({ type: "progress", phase: "Fetching source catalog", fetched })
   );
 
   // Full enrichment: same campaign/ad-set dictionary as sales/calls, built from the
-  // ad accounts referenced by the leads' journey sources.
+  // ad accounts referenced by the sources the leads actually use.
   let dict = new Map<string, AdInfo>();
   if (enrich === "full") {
-    const targets = collectJourneyTargets(journeys);
+    const usedTags = new Set<string>();
+    for (const l of leads) for (const t of l.tags || []) if (t.startsWith("@")) usedTags.add(t);
+    const usedSources: Source[] = [];
+    for (const t of usedTags) {
+      const src = sourceMap.get(t);
+      if (src) usedSources.push(src);
+    }
+    const targets = collectSourceTargets(usedSources);
     if (targets.length) {
       send({ type: "progress", phase: "Enriching campaigns/ad sets", fetched: 0, detail: `${targets.length} ad account(s)` });
       const { byAdId, warnings } = await buildAdDictionary(client, targets, fromDate, toDate, (detail, fetched) =>
@@ -152,10 +143,7 @@ async function runLeads(
     }
   }
 
-  const jByLead = new Map<string, LeadJourney>();
-  for (const j of journeys) if (j.lead?.id) jByLead.set(j.lead.id, j);
-
-  const rows = leads.map((l) => leadJourneyToRow(jByLead.get(l.id || "") || { lead: l }, l, dict));
+  const rows = leads.map((l) => leadToRow(l, sourceMap, dict));
   const withSource = rows.filter((r) => r.originSource || r.lastSource).length;
 
   const CHUNK = 500;
@@ -164,7 +152,7 @@ async function runLeads(
   }
   send({
     type: "warn",
-    message: `${withSource}/${leads.length} lead(s) have ad attribution (resolved from their sales/calls/carts). Leads with none have not converted yet, so Hyros does not expose an ad source for them via the API.`,
+    message: `${withSource}/${leads.length} lead(s) resolved to a source (from their @ source tags). Leads with none have no source tag in Hyros (organic/untracked or a deleted source).`,
   });
   send({ type: "done", total: leads.length });
 }

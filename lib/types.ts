@@ -65,6 +65,17 @@ export interface Call {
   lastSource?: Attribution;
 }
 
+/** A source link from /sources — the catalog the lead `@` tags map to. */
+export interface Source {
+  name?: string;
+  tag?: string; // "@..." — matches a lead's @-prefixed tag
+  disregarded?: boolean;
+  organic?: boolean;
+  adSource?: AdSource;
+  trafficSource?: { id?: string; name?: string };
+  category?: { id?: string; name?: string };
+}
+
 /** A cart inside a lead journey (carries its own attribution). */
 export interface Cart {
   id?: string;

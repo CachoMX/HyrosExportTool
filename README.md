@@ -41,14 +41,20 @@ returns a `nextPageId`. The app follows `nextPageId` until exhausted.
   **Last Source** = `lastSource.name`, and ad name / ad id / ad account / platform from
   `lastSource.adSource` + `lastSource.sourceLinkAd`.
 - **Calls** — `GET /api/v1.0/calls?fromDate&toDate`. Same attribution shape as sales.
-- **Leads** — `GET /api/v1.0/leads?fromDate&toDate` returns **no attribution**. A lead's ad source
-  lives on its sales/calls/carts, so the app pulls each lead's journey in batches
-  (`GET /api/v1.0/leads/journey?ids=…`, 20 ids/batch) and derives Origin Source (earliest record's
-  `firstSource`) and Last Source (latest record's `lastSource`), then enriches the ad columns exactly
-  like sales/calls. Raw `/leads/clicks` are **not** used — verified against the live account, lead
-  clicks are almost all organic funnel pages (`adspendType: NONE`) and never carry the ad source.
-  Consequence: Hyros only exposes an ad source once a lead **converts**, so leads that haven't
-  converted yet show no source (in the test account ~2-3% of leads had attribution).
+- **Leads** — `GET /api/v1.0/leads?fromDate&toDate` returns **no `firstSource`/`lastSource`**, but each
+  lead carries its source as `@`-prefixed **tags** (e.g. `@cm-top-monday-...-webinar-...`). The app
+  fetches the `/api/v1.0/sources` catalog **once** and maps those tags to the source `name`, platform
+  and ad account — **no per-lead calls**. Verified live: this resolves a source for **~73%** of leads,
+  versus ~2-3% from the old journey approach (which only saw leads that had already converted) and ~0%
+  from raw `/leads/clicks` (almost all organic). The `@` tag → source id generally does **not** line
+  up with the attribution report, so Ad Set / Campaign columns stay blank for leads (auto-hidden);
+  Origin/Last **Source** is the meaningful output.
+
+  > **Throughput note:** Hyros's list endpoints return ~7 records/sec (measured — `/calls` took 31s for
+  > 154 records, `/leads` 35s for 250). A full year of 160k leads is therefore ~hours regardless of the
+  > tool. The tag approach already removed the old ~8,000 journey calls (~3× faster); for very large
+  > accounts, export **month-by-month** rather than all-time in one shot (serverless platforms also cap
+  > request duration).
 
 ### Campaign / Ad Set enrichment (the "Full enrichment" toggle)
 

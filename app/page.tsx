@@ -284,9 +284,9 @@ export default function Page() {
         The API Key is sent only to this app&apos;s own server to call Hyros and is never stored. Rate limits (30/s,
         1000/min) are respected automatically. <b>Sales</b> &amp; <b>calls</b> carry full ad attribution (origin/last
         source, ad name, ad id, ad&nbsp;set name; ad&nbsp;set id and campaign columns fill only when your ad account
-        exposes them in Hyros). For <b>leads</b>, source is resolved from each lead&apos;s journey (their sales /
-        calls / carts) — Hyros only exposes an ad source once a lead converts, so leads that haven&apos;t converted yet
-        show no source.
+        exposes them in Hyros). For <b>leads</b>, source is resolved from the lead&apos;s <code>@</code> source tags
+        against the source catalog (~3 of 4 leads resolve; the rest are organic/untracked). Hyros&apos;s list endpoints
+        return ~7 records/sec, so very large ranges take time — export month&#8209;by&#8209;month for big accounts.
       </p>
 
       <section className="how">
@@ -324,14 +324,15 @@ export default function Page() {
             </div>
             <ol className="how-steps">
               <li>
-                <code>GET /leads</code> — base list, paginated.
+                <code>GET /leads</code> — base list, paginated. Each lead carries its source as{" "}
+                <code>@</code>-prefixed tags.
               </li>
               <li>
-                <code>GET /leads/journey</code> in batches of 20 ids — a lead&apos;s ad source lives on its
-                sales/calls/carts, so the source comes from there (raw clicks are organic, not used).
+                <code>GET /sources</code> once — the source catalog. Lead <code>@</code> tags map to it to resolve the
+                source <b>name</b>, platform &amp; ad account (no per-lead calls).
               </li>
               <li>
-                <code>GET /attribution</code> — same campaign / ad&nbsp;set enrichment as above.
+                <code>GET /attribution</code> — campaign / ad&nbsp;set enrichment where the ids line up.
               </li>
             </ol>
           </div>
