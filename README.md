@@ -52,9 +52,11 @@ returns a `nextPageId`. The app follows `nextPageId` until exhausted.
 
   > **Throughput note:** Hyros's list endpoints return ~7 records/sec (measured — `/calls` took 31s for
   > 154 records, `/leads` 35s for 250). A full year of 160k leads is therefore ~hours regardless of the
-  > tool. The tag approach already removed the old ~8,000 journey calls (~3× faster); for very large
-  > accounts, export **month-by-month** rather than all-time in one shot (serverless platforms also cap
-  > request duration).
+  > tool. Mitigations in the app: the date range is split into chunks fetched **in parallel** (de-duped
+  > by id — measured ~2.5–3× faster, e.g. 7.6k leads in 9 min vs ~27 min sequential), and the `/sources`
+  > catalog is **cached in memory** per API key (30-min TTL → repeat exports ~4× faster on that step).
+  > Even so, for very large accounts export **month-by-month** rather than all-time in one shot
+  > (serverless platforms also cap request duration).
 
 ### Campaign / Ad Set enrichment (the "Full enrichment" toggle)
 

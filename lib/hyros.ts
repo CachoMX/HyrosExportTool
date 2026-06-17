@@ -129,6 +129,65 @@ export class HyrosClient {
   }
 }
 
+/**
+ * Fetch a date-filtered list endpoint by splitting [fromDate, toDate] into chunks
+ * paginated CONCURRENTLY, then de-duped by id. Hyros list endpoints return only
+ * ~7 records/sec per request, but it serves a few requests in parallel, so chunking
+ * the date range gives a real (if throttled, ~2-3x) speed-up on large ranges.
+ * Chunks overlap by 1s at the seam and are de-duped so no record is missed or doubled.
+ */
+export async function fetchAllByDateChunks<T>(
+  client: HyrosClient,
+  path: string,
+  fromDate: string,
+  toDate: string,
+  extraParams: Record<string, string | number | boolean | undefined>,
+  idOf: (item: T) => string,
+  onProgress: (fetched: number) => void,
+  opts: { concurrency?: number; maxChunks?: number } = {}
+): Promise<T[]> {
+  const fromMs = Date.parse(fromDate);
+  const toMs = Date.parse(toDate);
+  const spanDays = (toMs - fromMs) / 86_400_000;
+  const maxChunks = opts.maxChunks ?? 24;
+  const n = Number.isFinite(spanDays) && spanDays > 2 ? Math.min(maxChunks, Math.max(4, Math.ceil(spanDays / 7))) : 1;
+
+  const all: T[] = [];
+  if (n <= 1) {
+    await client.paginate<T>(path, { ...extraParams, fromDate, toDate }, (items) => {
+      all.push(...items);
+      onProgress(all.length);
+    });
+    return all;
+  }
+
+  const step = (toMs - fromMs) / n;
+  const chunks = Array.from({ length: n }, (_, i) => {
+    const a = Math.round(fromMs + step * i);
+    const b = i === n - 1 ? toMs : Math.round(fromMs + step * (i + 1));
+    return {
+      from: new Date(i === 0 ? a : a - 1000).toISOString(), // 1s overlap at the seam
+      to: new Date(b).toISOString(),
+    };
+  });
+
+  const seen = new Set<string>();
+  await pool(chunks, opts.concurrency ?? 6, async (ch) => {
+    await client.paginate<T>(path, { ...extraParams, fromDate: ch.from, toDate: ch.to }, (items) => {
+      for (const it of items) {
+        const id = idOf(it);
+        if (id) {
+          if (seen.has(id)) continue;
+          seen.add(id);
+        }
+        all.push(it);
+      }
+      onProgress(all.length);
+    });
+  });
+  return all;
+}
+
 /** Run async tasks with bounded concurrency, preserving input order. */
 export async function pool<I, O>(
   items: I[],

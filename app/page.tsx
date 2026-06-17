@@ -339,8 +339,9 @@ export default function Page() {
         </div>
 
         <p className="how-foot">
-          Example measured: <b>Sales</b> for 1 week ≈ 7 calls · <b>Leads</b> for 5 days (330 leads) ≈ 20 calls.
-          Concurrency is capped (6 parallel) to stay within limits while keeping it fast.
+          Hyros&apos;s list endpoints return ~7 records/sec, so large ranges are slow. To speed things up the date
+          range is split into chunks fetched in parallel (de&#8209;duped by id), and the source catalog is cached
+          between exports. Very large accounts (100k+ records) are still best exported month&#8209;by&#8209;month.
         </p>
       </section>
     </div>

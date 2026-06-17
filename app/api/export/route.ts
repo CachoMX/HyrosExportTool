@@ -3,7 +3,7 @@
 // enriched and flattened. Keeps the API key server-side only.
 
 import { NextRequest } from "next/server";
-import { HyrosClient } from "@/lib/hyros";
+import { fetchAllByDateChunks, HyrosClient } from "@/lib/hyros";
 import { buildAdDictionary, fetchSourceMap } from "@/lib/enrich";
 import { callToRow, collectSourceTargets, collectTargets, leadToRow, saleToRow } from "@/lib/mapping";
 import { AdInfo, Call, EnrichMode, Lead, ReportType, Sale, Source, StreamMessage } from "@/lib/types";
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
       try {
         if (report === "sales") await runSalesOrCalls(client, "sales", fromDate, toDate, enrich, send);
         else if (report === "calls") await runSalesOrCalls(client, "calls", fromDate, toDate, enrich, send);
-        else if (report === "leads") await runLeads(client, fromDate, toDate, enrich, send);
+        else if (report === "leads") await runLeads(client, fromDate, toDate, enrich, send, apiKey);
         else send({ type: "error", message: `Unknown report "${report}"` });
       } catch (e: any) {
         send({ type: "error", message: e?.message || String(e) });
@@ -69,11 +69,15 @@ async function runSalesOrCalls(
   const path = report === "sales" ? "/api/v1.0/sales" : "/api/v1.0/calls";
   send({ type: "progress", phase: `Fetching ${report}`, fetched: 0 });
 
-  const records: (Sale | Call)[] = [];
-  await client.paginate<Sale | Call>(path, { fromDate, toDate }, (items, fetched) => {
-    records.push(...items);
-    send({ type: "progress", phase: `Fetching ${report}`, fetched });
-  });
+  const records = await fetchAllByDateChunks<Sale | Call>(
+    client,
+    path,
+    fromDate,
+    toDate,
+    {},
+    (r) => r.id || "",
+    (fetched) => send({ type: "progress", phase: `Fetching ${report}`, fetched })
+  );
 
   let dict = new Map<string, AdInfo>();
   if (enrich === "full" && records.length) {
@@ -104,21 +108,26 @@ async function runLeads(
   fromDate: string,
   toDate: string,
   enrich: EnrichMode,
-  send: (m: StreamMessage) => void
+  send: (m: StreamMessage) => void,
+  apiKey: string
 ) {
   send({ type: "progress", phase: "Fetching leads", fetched: 0 });
-  const leads: Lead[] = [];
-  await client.paginate<Lead>("/api/v1.0/leads", { fromDate, toDate }, (items, fetched) => {
-    leads.push(...items);
-    send({ type: "progress", phase: "Fetching leads", fetched });
-  });
+  const leads = await fetchAllByDateChunks<Lead>(
+    client,
+    "/api/v1.0/leads",
+    fromDate,
+    toDate,
+    {},
+    (l) => l.id || "",
+    (fetched) => send({ type: "progress", phase: "Fetching leads", fetched })
+  );
 
   // A lead's source lives in its `@`-prefixed tags (already in the base response),
   // which map to the /sources catalog. We fetch that catalog once (no per-lead calls)
   // and resolve each lead's source from its tags — ~74-87% coverage and scales to 160k.
   send({ type: "progress", phase: "Fetching source catalog", fetched: 0 });
-  const sourceMap = await fetchSourceMap(client, (fetched) =>
-    send({ type: "progress", phase: "Fetching source catalog", fetched })
+  const sourceMap = await fetchSourceMap(client, apiKey, (fetched, cached) =>
+    send({ type: "progress", phase: cached ? "Source catalog (cached)" : "Fetching source catalog", fetched })
   );
 
   // Full enrichment: same campaign/ad-set dictionary as sales/calls, built from the

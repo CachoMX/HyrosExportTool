@@ -15,20 +15,35 @@
 import { HyrosClient } from "./hyros";
 import { AdInfo, Source } from "./types";
 
+// In-memory cache of the source catalog, keyed by API key. The catalog rarely
+// changes but is large (~4k rows) and slow to fetch, so reuse it across exports.
+const SOURCE_CACHE = new Map<string, { at: number; byTag: Map<string, Source> }>();
+const SOURCE_TTL_MS = 30 * 60 * 1000;
+
 /**
  * Fetch the full /sources catalog once and index it by tag. A lead's `@`-prefixed
  * tag (in the base /leads response) matches a source's `tag`, which gives the source
  * name + adSource — this is how ~74-87% of leads get a source without any per-lead call.
+ * Pass `cacheKey` (the API key) to reuse the catalog across exports within the TTL.
  */
 export async function fetchSourceMap(
   client: HyrosClient,
-  onProgress?: (fetched: number) => void
+  cacheKey?: string,
+  onProgress?: (fetched: number, cached: boolean) => void
 ): Promise<Map<string, Source>> {
+  if (cacheKey) {
+    const hit = SOURCE_CACHE.get(cacheKey);
+    if (hit && Date.now() - hit.at < SOURCE_TTL_MS) {
+      onProgress?.(hit.byTag.size, true);
+      return hit.byTag;
+    }
+  }
   const byTag = new Map<string, Source>();
   await client.paginate<Source>("/api/v1.0/sources", {}, (rows, fetched) => {
     for (const s of rows) if (s.tag) byTag.set(s.tag, s);
-    onProgress?.(fetched);
+    onProgress?.(fetched, false);
   });
+  if (cacheKey) SOURCE_CACHE.set(cacheKey, { at: Date.now(), byTag });
   return byTag;
 }
 
